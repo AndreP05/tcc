@@ -3,13 +3,12 @@ import os
 import sys
 import serial
 import argparse
-import csv
 import pandas as pd
 from pathlib import Path
 from utils.torch_utils import select_device
 from utils.plots import Annotator, colors
 from utils.general import (check_img_size, check_imshow, check_requirements, cv2,
-                           increment_path, non_max_suppression, print_args, scale_coords)
+                           increment_path, non_max_suppression, scale_coords)
 from utils.dataloaders import LoadStreams
 from models.common import DetectMultiBackend
 
@@ -23,16 +22,13 @@ if not os.path.exists('results/'):
     os.mkdir('results/')
     os.mkdir('results/data/')
     os.mkdir('results/frames/')
-with open('results/data/data.csv', 'w', encoding='utf-8', newline='') as csvFile:
-    writer = csv.writer(csvFile)
-    writer.writerow(['frame', 'xmin', 'ymin', 'xmax', 'ymax', 'scaled_xmin',
-                    'scaled_ymin', 'scaled_xmax', 'scaled_ymax'])
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+objetivo = ''
 
 
 @torch.no_grad()
@@ -43,12 +39,10 @@ def run(
         source=ROOT / 'data/images',  # file/dir/URL/glob, 0 for webcam
         data=ROOT / 'data/coco128.yaml',  # dataset.yaml path
         imgsz=(640, 640),  # inference size (height, width)
-        nosave=False,  # do not save images/videos
         project=ROOT / 'runs/detect',  # save results to project/name
         name='exp',  # save results to project/name
 ):
     source = str(source)
-    save_img = not nosave and not source.endswith('.txt')  # save inference images
 
     # Directories
     save_dir = increment_path(Path(project) / name, exist_ok=False)  # increment run
@@ -105,7 +99,7 @@ def run(
 
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
-                    if save_img or view_img:  # Add bbox to image
+                    if view_img:  # Add bbox to image
                         x1 = int(xyxy[0].item())
                         y1 = int(xyxy[1].item())
                         x2 = int(xyxy[2].item())
@@ -144,12 +138,9 @@ def run(
                         annotator.box_label(
                             xyxy, f'{names[int(cls)]} { distance_pred[0]}', color=colors(int(cls), True))
 
-                        object_counter += 1
-                        with open('results/data/data.csv', 'a') as csvFile:
-                            writer = csv.writer(csvFile)
-                            writer.writerow(csv_row_list)
+                        # annotator.box_label([left, top, right, bottom], f'Meio')
 
-                        cv2.imwrite('results/frames/{0}.png'.format(frame), im0)
+                        object_counter += 1
                     
             # Stream results
             im0 = annotator.result()
@@ -157,21 +148,41 @@ def run(
                 cv2.imshow(str(p), im0)
                 cv2.waitKey(1)  # 1 millisecond
 
-            # Save results (image with detections)
-            if save_img:
-                if vid_path[i] != save_path:  # new video
-                    vid_path[i] = save_path
-                    fps, w, h = 30, im0.shape[1], im0.shape[0]
-                    save_path = str(Path(save_path).with_suffix('.mp4'))  # force *.mp4 suffix on results videos
-                    vid_writer[i] = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-                vid_writer[i].write(im0)
+        if 'distance_pred' in locals() and 'img_height' in locals() and 'img_width' in locals():
+            # Check if end reached
+            if objetivo == 'fim':
+                with serial.Serial('/dev/ttyUSB0', 9600, timeout=1) as ser:
+                    ser.write("stop".encode())
 
-        if 'distance_pred' in locals():
             # Process video data
-            print(s, distance_pred)
+            left = img_width / 2 - 50
+            right = img_width / 2 + 50
+            top = img_height / 2 - 50
+            bottom = img_height / 2 + 50
 
-            with serial.Serial('/dev/ttyUSB0', 9600, timeout=1) as ser:
-                ser.write("right".encode())
+            mid_point = [(x1 + x2) / 2, (y1 + y2) / 2]
+
+            if right > mid_point[0] > left and bottom > mid_point[1] > top:
+                # Objeto central
+                principal = 0
+
+                for x in distance_pred:
+                    if x[0] > principal:
+                        principal = x[0]
+
+                time = int(principal) // 50
+
+                if time == 0:
+                    with serial.Serial('/dev/ttyUSB0', 9600, timeout=1) as ser:
+                        ser.write("back3".encode())
+                else:
+                    if objetivo == "direita":
+                        with serial.Serial('/dev/ttyUSB0', 9600, timeout=1) as ser:
+                            ser.write("righ{}".format(time).encode())
+                    else:
+                        with serial.Serial('/dev/ttyUSB0', 9600, timeout=1) as ser:
+                            ser.write("left{}".format(time).encode())
+        time = 0
 
 
 def parse_opt():
@@ -180,20 +191,19 @@ def parse_opt():
     parser.add_argument('--source', type=str, default=ROOT / 'data/images', help='file/dir/URL/glob, 0 for webcam')
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='(optional) dataset.yaml path')
     parser.add_argument('--imgsz', '--img', '--img-size', nargs='+', type=int, default=[640], help='inference size h,w')
-    parser.add_argument('--nosave', action='store_true', help='do not save images/videos')
     parser.add_argument('--project', default=ROOT / 'runs/detect', help='save results to project/name')
     parser.add_argument('--name', default='exp', help='save results to project/name')
     parser.add_argument('--model_dist', help='model json file path')
     parser.add_argument('--weights_dist', help='model weights file path')
-    opt = parser.parse_args()
-    opt.imgsz *= 2 if len(opt.imgsz) == 1 else 1  # expand
-    print_args(vars(opt))
-    return opt
+    args = parser.parse_args()
+    args.imgsz *= 2 if len(args.imgsz) == 1 else 1  # expand
+
+    return args
 
 
-def main(opt):
+def main(options):
     check_requirements(exclude=('tensorboard', 'thop'))
-    run(**vars(opt))
+    run(**vars(options))
 
 
 if __name__ == "__main__":
